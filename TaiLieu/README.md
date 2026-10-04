@@ -19,3 +19,7 @@ Xây dựng giao diện hồ sơ sinh viên trên ứng dụng Flutter, gồm �
 - `main()`: điểm bắt đầu của ứng dụng, gọi `runApp` để hiển thị widget gốc.
 - `BaiTapApp.build()`: tạo `MaterialApp`, cấu hình giao diện và chọn `StudentProfileScreen` làm màn hình đầu tiên.
 - `StudentProfileScreen.build()`: dựng màn hình hồ sơ, căn giữa thẻ thông tin và sắp xếp avatar, tên, MSSV cùng các nút bằng widget Flutter.
+
+## Output
+
+<img width="1917" height="1020" alt="Screenshot 2026-10-04 132337" src="https://github.com/user-attachments/assets/4956a56d-e4b0-4143-832f-493a611fa3a2" />
