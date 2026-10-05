@@ -4,7 +4,7 @@
 
 ## Chạy
 
-Mở terminal tại thư mục `SourceCode` rồi chạy:
+Mở terminal tại thư mục `week1/ui_student` rồi chạy:
 
 ```bash
 flutter pub get

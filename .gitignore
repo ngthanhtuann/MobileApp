@@ -8,7 +8,7 @@
 **/coverage/
 
 # Machine-specific SDK configuration
-SourceCode/android/local.properties
+**/android/local.properties
 
 # IDE files
 **/.idea/

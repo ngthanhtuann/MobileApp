@@ -1,16 +1,19 @@
-# Bài tập 1 — UI hồ sơ sinh viên
+# Bài tập Lập trình thiết bị di động
 
-Ứng dụng Flutter dựng giao diện hồ sơ sinh viên theo đề bài: ảnh đại diện, họ tên, mã số sinh viên và các nút quay lại/chỉnh sửa.
+Mỗi tuần nằm trong một thư mục riêng, gồm mã nguồn Flutter và tệp mô tả bài tập.
 
-## Chạy ứng dụng
+## Cấu trúc
+
+```
+week1/
+├── ui_student/      # Dự án Flutter: giao diện hồ sơ sinh viên
+└── BaiTapVeNha.md   # Mô tả bài tập, mục tiêu, kết quả
+```
+
+## Chạy ứng dụng tuần 1
 
 ```bash
+cd week1/ui_student
 flutter pub get
 flutter run
 ```
-
-## Mã nguồn
-
-- `lib/main.dart`: giao diện hồ sơ sinh viên.
-- `test/widget_test.dart`: kiểm tra tên và MSSV hiển thị.
-- `pubspec.yaml`: cấu hình dự án Flutter.
