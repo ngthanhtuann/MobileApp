@@ -22,4 +22,5 @@ Xây dựng giao diện hồ sơ sinh viên trên ứng dụng Flutter, gồm �
 
 ## Output
 
-<img width="1917" height="1020" alt="Screenshot 2026-10-04 132337" src="https://github.com/user-attachments/assets/4956a56d-e4b0-4143-832f-493a611fa3a2" />
+<img width="1917" height="1015" alt="Screenshot 2026-10-05 235040" src="https://github.com/user-attachments/assets/77e41a8e-a296-4363-bc82-927dd8735bb7" />
+
