@@ -113,7 +113,7 @@ fun ImageDetailScreen(nav: NavController) {
             AsyncImage(
                 model = LOGO_URL,
                 contentDescription = "Logo UTH từ link",
-                error = painterResource(R.drawable.uth_01), // link hỏng thì hiện ảnh có sẵn trong app
+                error = painterResource(R.drawable.uth_01),
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
             )
             Spacer(Modifier.height(8.dp))
