@@ -1,22 +1,24 @@
 package com.example.bt2firebaseall
 
-import com.google.firebase.FirebaseApp
-import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
-import retrofit2.HttpException
-import retrofit2.Response
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.http.*
-import java.time.LocalDate
-import java.time.temporal.ChronoUnit
+import retrofit2.http.Body
+import retrofit2.http.DELETE
+import retrofit2.http.GET
+import retrofit2.http.PATCH
+import retrofit2.http.POST
+import retrofit2.http.Path
+import retrofit2.http.Query
 
 // ===================== Model: cùng cấu trúc JSON với API trong đề =====================
 
 data class Subtask(val title: String = "", val done: Boolean = false)
 
-/** Mọi tham số đều có giá trị mặc định -> có constructor rỗng cho Gson. `id` là key trong database, không lưu vào body. */
+/** Mọi tham số đều có giá trị mặc định -> có constructor rỗng cho Gson. `id` nằm trên URL (/tasks/{id}) nên không gửi trong body. */
 data class Task(
     @Transient val id: String = "",
     val title: String = "",
@@ -30,35 +32,27 @@ data class Task(
     val subtasks: List<Subtask> = emptyList(),
 )
 
-// ===================== Task API =====================
-// Mock API của thầy (share.tryapps.store/mock/teach/tasks) cần token riêng (trả 401),
-// nên dùng REST API của chính Firebase Realtime Database: cùng các lệnh GET / PATCH / DELETE.
+// ===================== Task API: mock API của thầy =====================
+// Mọi request phải kèm header "Authorization: Bearer <token>" (thiếu là 401), gắn bằng interceptor bên dưới.
 
-interface TaskApi {
-    @GET("users/{uid}/tasks.json")
-    suspend fun getTasks(@Path("uid") uid: String, @Query("auth") auth: String): Response<Map<String, Task>>
+private const val MOCK_TOKEN = "Bearer TuanTruong-uth-student"
 
-    @GET("users/{uid}/tasks/{id}.json")
-    suspend fun getTask(@Path("uid") uid: String, @Path("id") id: String, @Query("auth") auth: String): Response<Task>
+interface MockApi {
+    @GET("tasks")
+    suspend fun getTasks(): List<JsonObject>
 
-    @POST("users/{uid}/tasks.json")
-    suspend fun addTask(@Path("uid") uid: String, @Query("auth") auth: String, @Body task: Task)
+    @GET("tasks/{id}")
+    suspend fun getTask(@Path("id") id: String): JsonObject
 
-    @PATCH("users/{uid}/tasks/{id}.json")
-    suspend fun updateTask(
-        @Path("uid") uid: String, @Path("id") id: String, @Query("auth") auth: String,
-        @Body fields: Map<String, @JvmSuppressWildcards Any>,
-    )
+    @POST("tasks")
+    suspend fun addTask(@Body task: Task)
 
-    @DELETE("users/{uid}/tasks/{id}.json")
-    suspend fun deleteTask(@Path("uid") uid: String, @Path("id") id: String, @Query("auth") auth: String)
+    @PATCH("tasks/{id}")
+    suspend fun updateTask(@Path("id") id: String, @Body fields: Map<String, @JvmSuppressWildcards Any>)
 
-    @PUT("users/{uid}/tasks.json")
-    suspend fun replaceAll(@Path("uid") uid: String, @Query("auth") auth: String, @Body tasks: Map<String, Task>)
+    @DELETE("tasks/{id}")
+    suspend fun deleteTask(@Path("id") id: String)
 }
-
-/** Database trả "null" khi chưa có dữ liệu, nên GET dùng Response<T> và tự kiểm tra lỗi HTTP. */
-fun <T> Response<T>.bodyOrThrow(): T? = if (isSuccessful) body() else throw HttpException(this)
 
 // ===================== Crypto API (Nâng cao 02) =====================
 
@@ -86,49 +80,28 @@ interface CryptoApi {
 }
 
 object Api {
-    val tasks: TaskApi by lazy {
-        Retrofit.Builder()
-            .baseUrl(FirebaseApp.getInstance().options.databaseUrl!! + "/")
-            .addConverterFactory(GsonConverterFactory.create())
-            .build().create(TaskApi::class.java)
+    /** Gắn header "Authorization: Bearer <token>" vào mọi request gửi tới mock API. */
+    private val addToken = Interceptor { chain ->
+        val request = chain.request().newBuilder()
+            .header("Authorization", MOCK_TOKEN)
+            .build()
+        chain.proceed(request)
     }
 
     val mock: MockApi by lazy {
         Retrofit.Builder()
             .baseUrl("https://share.tryapps.store/mock/teach/")
+            .client(OkHttpClient.Builder().addInterceptor(addToken).build())
             .addConverterFactory(GsonConverterFactory.create())
-            .build().create(MockApi::class.java)
+            .build()
+            .create(MockApi::class.java)
     }
 
     val crypto: CryptoApi by lazy {
         Retrofit.Builder()
             .baseUrl("https://api.coingecko.com/api/v3/")
             .addConverterFactory(GsonConverterFactory.create())
-            .build().create(CryptoApi::class.java)
+            .build()
+            .create(CryptoApi::class.java)
     }
-}
-
-// ===================== Mock API của thầy: nguồn dữ liệu mẫu =====================
-// Mock luôn trả cùng một bộ mẫu (PATCH/POST/DELETE không lưu lại), nên chỉ dùng để lấy dữ liệu ban đầu.
-
-private const val MOCK_TOKEN = "Bearer TuanTruong-uth-student"
-
-interface MockApi {
-    @Headers("Authorization: $MOCK_TOKEN")
-    @GET("tasks")
-    suspend fun getTasks(): List<JsonObject>
-}
-
-private val gson = Gson()
-
-/**
- * GET /mock/teach/tasks rồi đổi thành map để lưu vào Firebase.
- * Ngày trong mock cố định (2026-10-20 là "hôm nay" của prototype) -> dời sao cho ngày sớm nhất = hôm nay.
- */
-suspend fun mockSampleTasks(): Map<String, Task> {
-    val list = Api.mock.getTasks().map { it["id"].asString to gson.fromJson(it, Task::class.java) }
-    val first = list.minOf { LocalDate.parse(it.second.date) }
-    val shift = ChronoUnit.DAYS.between(first, LocalDate.now())
-    // key dạng chữ: key toàn số thì Realtime Database sẽ trả về mảng thay vì object
-    return list.associate { (id, t) -> "task$id" to t.copy(date = LocalDate.parse(t.date).plusDays(shift).toString()) }
 }

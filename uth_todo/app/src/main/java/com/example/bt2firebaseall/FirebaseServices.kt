@@ -25,20 +25,27 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.FirebaseNetworkException
 import com.google.firebase.analytics.FirebaseAnalytics
-import com.google.firebase.auth.*
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import com.google.firebase.auth.FirebaseAuthWeakPasswordException
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.crashlytics.FirebaseCrashlytics
-import com.google.firebase.database.*
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig
 import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings
 import com.google.firebase.storage.FirebaseStorage
-import com.google.gson.Gson
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.tasks.await
 import retrofit2.HttpException
 import java.io.IOException
+
+// Các dịch vụ Firebase dùng trong app (bài Tuần 5): Authentication, Storage, Remote Config,
+// Analytics + Crashlytics, Cloud Messaging. Công việc (tasks) nằm ở TaskRepository.kt.
 
 private const val TAG = "UthFirebase"
 
@@ -62,6 +69,13 @@ object AuthRepository {
         auth.signInAnonymously().await()
     }
 
+    /** Hồ sơ › Sửa: đổi tên hiển thị trên Firebase Auth. */
+    suspend fun updateName(name: String) {
+        val request = UserProfileChangeRequest.Builder().setDisplayName(name).build()
+        user!!.updateProfile(request).await()
+    }
+
+    /** Hiện bảng chọn tài khoản Google (Credential Manager), lấy idToken rồi đăng nhập Firebase. */
     suspend fun signInGoogle(activity: Activity) {
         // default_web_client_id do plugin google-services sinh ra từ google-services.json
         val resId = activity.resources.getIdentifier("default_web_client_id", "string", activity.packageName)
@@ -78,6 +92,7 @@ object AuthRepository {
         auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
     }
 
+    /** Đăng xuất Firebase, xóa dữ liệu công việc trong máy và quên tài khoản Google đã chọn. */
     suspend fun signOut(context: Context) {
         TaskRepository.stop()
         auth.signOut()
@@ -85,7 +100,7 @@ object AuthRepository {
     }
 }
 
-/** Đổi lỗi Firebase sang câu thông báo tiếng Việt dễ hiểu. */
+/** Đổi lỗi (Firebase, Google, gọi API) sang câu thông báo tiếng Việt dễ hiểu. */
 fun Throwable.toMessage(): String = when (this) {
     is FirebaseAuthWeakPasswordException -> "Mật khẩu quá yếu (cần ít nhất 6 ký tự)"
     is FirebaseAuthInvalidCredentialsException -> "Email không hợp lệ hoặc mật khẩu không đúng"
@@ -95,7 +110,7 @@ fun Throwable.toMessage(): String = when (this) {
     is GetCredentialCancellationException -> "Bạn đã hủy đăng nhập Google"
     is NoCredentialException -> "Máy chưa có tài khoản Google. Vào Cài đặt › Mật khẩu & tài khoản › Thêm tài khoản › Google rồi thử lại."
     is HttpException -> when (code()) {
-        401 -> "Không có quyền truy cập (401). Hãy đăng nhập lại."
+        401 -> "Token API không hợp lệ (401)"
         429 -> "Gọi API quá nhiều, thử lại sau ít phút (429)"
         else -> "Lỗi máy chủ (${code()})"
     }
@@ -103,88 +118,7 @@ fun Throwable.toMessage(): String = when (this) {
     else -> message ?: "Lỗi không xác định"
 }
 
-// ===================== 2. Realtime Database =====================
-
-/**
- * Công việc lưu tại users/{uid}/tasks/{id}.
- * - Đọc/ghi qua REST API (Retrofit, xem Api.kt): GET khi mở màn hình, POST/PATCH/DELETE khi thao tác.
- * - Đồng thời nghe realtime bằng Firebase SDK: sửa trên Console là app đổi ngay.
- */
-object TaskRepository {
-    val tasks = mutableStateListOf<Task>()
-    val loading = mutableStateOf(false)
-    val loadError = mutableStateOf<String?>(null)
-    private var uid: String? = null
-    private var ref: DatabaseReference? = null
-    private val gson = Gson()
-
-    private val listener = object : ValueEventListener {
-        override fun onDataChange(snapshot: DataSnapshot) {
-            show(snapshot.children.map { gson.fromJson(gson.toJson(it.value), Task::class.java).copy(id = it.key!!) })
-        }
-
-        override fun onCancelled(error: DatabaseError) {
-            Log.w(TAG, "Database: ${error.message}")
-        }
-    }
-
-    private fun show(list: List<Task>) {
-        tasks.clear()
-        tasks.addAll(list.sortedWith(compareBy({ it.date }, { it.time })))
-    }
-
-    private fun me() = uid ?: throw IllegalStateException("Chưa đăng nhập")
-    private suspend fun token() = FirebaseAuth.getInstance().currentUser!!.getIdToken(false).await().token!!
-
-    fun start(uid: String) {
-        if (this.uid == uid) return
-        stop()
-        this.uid = uid
-        ref = FirebaseDatabase.getInstance().getReference("users/$uid/tasks").also { it.addValueEventListener(listener) }
-    }
-
-    fun stop() {
-        ref?.removeEventListener(listener)
-        ref = null
-        uid = null
-        tasks.clear()
-    }
-
-    /** GET /tasks — tải mọi việc khi mở màn hình. Tài khoản mới chưa có việc -> tạo dữ liệu mẫu. */
-    suspend fun load() {
-        loading.value = true
-        loadError.value = null
-        try {
-            val map = Api.tasks.getTasks(me(), token()).bodyOrThrow()
-            if (map.isNullOrEmpty()) resetSamples() else show(map.map { (id, t) -> t.copy(id = id) })
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            loadError.value = e.toMessage()
-        } finally {
-            loading.value = false
-        }
-    }
-
-    /** GET /tasks/{id} — mở khi bấm vào một việc. */
-    suspend fun get(id: String): Task =
-        Api.tasks.getTask(me(), id, token()).bodyOrThrow()?.copy(id = id) ?: throw NoSuchElementException("Công việc không còn tồn tại")
-
-    suspend fun add(task: Task) = Api.tasks.addTask(me(), token(), task)
-
-    /** PATCH /tasks/{id} — chỉ gửi các trường thay đổi. */
-    suspend fun update(id: String, fields: Map<String, Any>) = Api.tasks.updateTask(me(), id, token(), fields)
-
-    suspend fun delete(id: String) = Api.tasks.deleteTask(me(), id, token())
-
-    suspend fun resetSamples() {
-        val samples = mockSampleTasks()
-        Api.tasks.replaceAll(me(), token(), samples)
-        show(samples.map { (id, t) -> t.copy(id = id) })
-    }
-}
-
-// ===================== 3. Storage =====================
+// ===================== 2. Storage =====================
 
 /** Ảnh đại diện lưu tại avatars/{uid}.jpg */
 object AvatarRepository {
@@ -197,33 +131,38 @@ object AvatarRepository {
     suspend fun load(uid: String): ImageBitmap? = runCatching {
         val bytes = ref(uid).getBytes(10L * 1024 * 1024).await()
         // shortcut: thu nhỏ cố định 4 lần với ảnh > 1MB, đủ cho avatar; muốn đẹp hơn thì resize trước khi upload
-        val opts = BitmapFactory.Options().apply { inSampleSize = if (bytes.size > 1_000_000) 4 else 1 }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
+        val options = BitmapFactory.Options().apply { inSampleSize = if (bytes.size > 1_000_000) 4 else 1 }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
     }.onFailure { Log.i(TAG, "Chưa có avatar: ${it.message}") }.getOrNull()
 }
 
-// ===================== 4. Remote Config =====================
+// ===================== 3. Remote Config =====================
 
+/** Câu nhắn trong thẻ "Tiến độ hôm nay" ở Trang chủ, đổi được từ Firebase Console (key `home_message`). */
 object RemoteConfigRepo {
     private const val KEY = "home_message"
     val homeMessage = mutableStateOf("Cố lên, bạn làm được!")
 
     fun fetch() {
-        val rc = FirebaseRemoteConfig.getInstance()
-        rc.setConfigSettingsAsync(FirebaseRemoteConfigSettings.Builder().setMinimumFetchIntervalInSeconds(60).build())
-        rc.setDefaultsAsync(mapOf(KEY to homeMessage.value))
-        rc.fetchAndActivate().addOnCompleteListener {
-            if (!it.isSuccessful) Log.w(TAG, "Remote Config lỗi", it.exception)
-            homeMessage.value = rc.getString(KEY)
+        val remoteConfig = FirebaseRemoteConfig.getInstance()
+        val settings = FirebaseRemoteConfigSettings.Builder().setMinimumFetchIntervalInSeconds(60).build()
+        remoteConfig.setConfigSettingsAsync(settings)
+        remoteConfig.setDefaultsAsync(mapOf(KEY to homeMessage.value))
+        remoteConfig.fetchAndActivate().addOnCompleteListener { result ->
+            if (!result.isSuccessful) Log.w(TAG, "Remote Config lỗi", result.exception)
+            homeMessage.value = remoteConfig.getString(KEY)
         }
     }
 }
 
-// ===================== 5. Analytics + Crashlytics =====================
+// ===================== 4. Analytics + Crashlytics =====================
 
 object Tracker {
+    /** Ghi một sự kiện Analytics, ví dụ log(context, "add_task", "category" to "study"). */
     fun log(context: Context, event: String, vararg params: Pair<String, String>) {
-        FirebaseAnalytics.getInstance(context).logEvent(event, Bundle().apply { params.forEach { putString(it.first, it.second) } })
+        val bundle = Bundle()
+        params.forEach { (key, value) -> bundle.putString(key, value) }
+        FirebaseAnalytics.getInstance(context).logEvent(event, bundle)
     }
 
     fun setUser(context: Context, uid: String) {
@@ -232,22 +171,25 @@ object Tracker {
     }
 }
 
-// ===================== 6. Cloud Messaging =====================
+// ===================== 5. Cloud Messaging =====================
 
 const val CHANNEL_ID = "uth_todo"
 const val TOPIC = "uth_todo"
 
+/** Thông báo đã nhận + FCM token của máy, hiển thị ở tab Thông báo. */
 object Inbox {
     val messages = mutableStateListOf<String>()
     val token = mutableStateOf("Đang lấy token...")
 
     fun init(context: Context) {
-        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "UTH Todo", NotificationManager.IMPORTANCE_DEFAULT)
-        )
-        val fcm = FirebaseMessaging.getInstance()
-        fcm.subscribeToTopic(TOPIC)
-        fcm.token.addOnCompleteListener { token.value = if (it.isSuccessful) it.result else "Lỗi: ${it.exception?.message}" }
+        val channel = NotificationChannel(CHANNEL_ID, "UTH Todo", NotificationManager.IMPORTANCE_DEFAULT)
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+
+        val messaging = FirebaseMessaging.getInstance()
+        messaging.subscribeToTopic(TOPIC)
+        messaging.token.addOnCompleteListener { result ->
+            token.value = if (result.isSuccessful) result.result else "Lỗi: ${result.exception?.message}"
+        }
     }
 }
 
