@@ -29,29 +29,35 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 
-// Danh sách: tìm kiếm, lọc theo nhóm, chia hai phần CẦN LÀM / ĐÃ XONG.
+// Danh sach: TẤT CA cong viec (khac HomeScreen chi hien hom nay).
+// Tim kiem, loc theo nhom, chia CAN LAM / DA XONG.
 
 @Composable
 fun ListScreen(nav: NavController) = TabScaffold(nav, Routes.LIST) { padding ->
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var searchText by rememberSaveable { mutableStateOf("") }
-    var selectedCategory by rememberSaveable { mutableStateOf<Category?>(null) } // null = Tất cả
+    val scope   = rememberCoroutineScope()
+    var searchText       by rememberSaveable { mutableStateOf("") }
+    var selectedCategory by rememberSaveable { mutableStateOf<Category?>(null) }
 
-    val shownTasks = TaskRepository.tasks.filter { task ->
-        val matchesCategory = selectedCategory == null || task.cat == selectedCategory
-        val matchesSearch = task.title.contains(searchText.trim(), ignoreCase = true)
-        matchesCategory && matchesSearch
+    val allTasks  = TaskRepository.tasks
+    // Header: dem tren toan bo (nhat quan voi the nhom ben HomeScreen)
+    val totalTodo = allTasks.count { !it.done }
+    val totalDone = allTasks.count { it.done }
+
+    // Loc
+    val shownTasks = allTasks.filter { task ->
+        val matchCat    = selectedCategory == null || task.cat == selectedCategory
+        val matchSearch = task.title.contains(searchText.trim(), ignoreCase = true)
+        matchCat && matchSearch
     }
     val (doneTasks, todoTasks) = shownTasks.partition { it.done }
-    val notDoneCount = TaskRepository.tasks.count { !it.done }
 
     @Composable
     fun TaskItem(task: Task) = TaskRow(
-        task = task,
-        timeLabel = task.whenLabel(),
-        compact = task.done,
-        onOpen = { nav.navigate(Routes.detail(task.id)) },
+        task         = task,
+        timeLabel    = task.whenLabel(),
+        compact      = task.done,
+        onOpen       = { nav.navigate(Routes.detail(task.id)) },
         onToggleDone = { scope.call(context) { TaskRepository.toggleDone(task) } },
     )
 
@@ -60,39 +66,52 @@ fun ListScreen(nav: NavController) = TabScaffold(nav, Routes.LIST) { padding ->
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(vertical = 16.dp),
     ) {
+        // Header: so lieu nhat quan voi CategoryCard ben HomeScreen
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Danh sách", fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text("$notDoneCount việc chưa xong", fontSize = 12.sp, color = AppColors.Gray)
+                Text(
+                    "Danh sách",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "$totalTodo chưa xong  •  $totalDone đã xong",
+                    fontSize = 12.sp,
+                    color = AppColors.Gray,
+                )
             }
         }
+
         item {
             OutlinedTextField(
-                value = searchText,
+                value         = searchText,
                 onValueChange = { searchText = it },
-                placeholder = { Text("Tìm công việc") },
-                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth(),
+                placeholder   = { Text("Tìm công việc") },
+                leadingIcon   = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                singleLine    = true,
+                shape         = RoundedCornerShape(12.dp),
+                modifier      = Modifier.fillMaxWidth(),
             )
         }
+
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = selectedCategory == null,
-                    onClick = { selectedCategory = null },
-                    label = { Text("Tất cả") },
+                    onClick  = { selectedCategory = null },
+                    label    = { Text("Tất cả") },
                 )
                 Category.entries.forEach { category ->
                     FilterChip(
                         selected = selectedCategory == category,
-                        onClick = { selectedCategory = category },
-                        label = { Text(category.label) },
+                        onClick  = { selectedCategory = category },
+                        label    = { Text(category.label) },
                     )
                 }
             }
         }
+
         item { LoadState() }
 
         if (todoTasks.isNotEmpty()) item { SectionLabel("CẦN LÀM") }

@@ -44,8 +44,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,97 +54,53 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.CancellationException
+import androidx.lifecycle.viewmodel.compose.viewModel
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.Locale
 
 // Màn Việc mới (POST /tasks) và Sửa công việc (PATCH /tasks/{id}) dùng chung một giao diện.
+// Kiến trúc MVVM: TaskEditScreen (View) ← TaskEditViewModel (ViewModel) ← TaskRepository (Model)
 
 /** `taskId = null` -> thêm việc mới; có `taskId` -> sửa việc đó. */
 @Composable
-fun TaskEditScreen(taskId: String?, onClose: () -> Unit) {
+fun TaskEditScreen(
+    taskId: String?,
+    onClose: () -> Unit,
+    vm: TaskEditViewModel = viewModel(),          // ViewModel inject qua Compose
+) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val isNew = taskId == null
 
-    // Dữ liệu trong form (rememberSaveable: xoay màn hình không bị mất)
-    var title by rememberSaveable { mutableStateOf("") }
-    var note by rememberSaveable { mutableStateOf("") }
-    var category by rememberSaveable { mutableStateOf(Category.STUDY) }
-    var priority by rememberSaveable { mutableStateOf(Priority.MEDIUM) }
-    var date by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
-    var time by rememberSaveable { mutableStateOf("19:00") }
-    var remind by rememberSaveable { mutableStateOf(true) }
+    // Khởi tạo ViewModel một lần duy nhất
+    LaunchedEffect(taskId) {
+        if (isNew) vm.initNew() else vm.load(taskId!!)
+    }
 
-    var isLoaded by rememberSaveable { mutableStateOf(isNew) } // việc mới thì không cần tải
-    var isSaving by remember { mutableStateOf(false) }
+    // Hiển thị lỗi (tải hoặc lưu) qua Toast rồi xóa
+    LaunchedEffect(vm.errorMsg) {
+        vm.errorMsg?.let { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            if (!isNew) onClose()          // lỗi tải dữ liệu: đóng màn hình
+            vm.clearError()
+        }
+    }
+
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
 
-    // Sửa: GET /tasks/{id} rồi điền sẵn vào form
-    if (taskId != null && !isLoaded) {
-        LaunchedEffect(taskId) {
-            try {
-                val task = TaskRepository.get(taskId)
-                title = task.title
-                note = task.note
-                category = task.cat
-                priority = Priority.from(task.priority)
-                date = task.date
-                time = task.time
-                remind = task.remind
-                isLoaded = true
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Toast.makeText(context, e.toMessage(), Toast.LENGTH_LONG).show()
-                onClose()
-            }
-        }
-    }
-
-    val canSave = isLoaded && title.isNotBlank() && !isSaving
-
-    fun save() {
-        if (!canSave) return
-        isSaving = true
-        val task = Task(
-            title = title.trim(),
-            note = note.trim(),
-            category = category.key,
-            date = date,
-            time = time,
-            priority = priority.key,
-            remind = remind,
-        )
-        val successMessage = if (isNew) "Đã thêm công việc" else "Đã lưu thay đổi"
-        val job = scope.call(context, onDone = {
-            Toast.makeText(context, successMessage, Toast.LENGTH_SHORT).show()
-            onClose()
-        }) {
-            if (taskId == null) {
-                TaskRepository.add(task)
-                Tracker.log(context, "add_task", "category" to task.category)
-            } else {
-                TaskRepository.update(taskId, task.toChangeMap())
-            }
-        }
-        job.invokeOnCompletion { isSaving = false }
-    }
-
     if (showDatePicker) {
         PickDateDialog(
-            initialDate = date,
-            onPicked = { date = it },
+            initialDate = vm.date,
+            onPicked = { vm.date = it },
             onDismiss = { showDatePicker = false },
         )
     }
     if (showTimePicker) {
         PickTimeDialog(
-            initialTime = time,
-            onPicked = { time = it },
+            initialTime = vm.time,
+            onPicked = { vm.time = it },
             onDismiss = { showTimePicker = false },
         )
     }
@@ -158,18 +112,19 @@ fun TaskEditScreen(taskId: String?, onClose: () -> Unit) {
             onLeftClick = onClose,
             title = if (isNew) "Việc mới" else "Sửa công việc",
             actionText = "Lưu",
-            actionEnabled = canSave,
-            onActionClick = ::save,
+            actionEnabled = vm.canSave,
+            onActionClick = { vm.save(context, taskId) { onClose() } },
         )
-        if (!isLoaded) LinearProgressIndicator(Modifier.fillMaxWidth())
+
+        if (!vm.isLoaded) LinearProgressIndicator(Modifier.fillMaxWidth())
 
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 12.dp)) {
             // Tên + ghi chú
             Column(Modifier.fillMaxWidth().card(16)) {
                 FieldCaption("Tên công việc")
                 TextField(
-                    value = title,
-                    onValueChange = { title = it },
+                    value = vm.title,
+                    onValueChange = { vm.title = it },
                     placeholder = { Text("Ví dụ: Ôn chương 4 – Giải thuật") },
                     singleLine = true,
                     textStyle = LocalTextStyle.current.copy(fontSize = 18.sp, fontWeight = FontWeight.Medium),
@@ -179,8 +134,8 @@ fun TaskEditScreen(taskId: String?, onClose: () -> Unit) {
                 HorizontalDivider(color = AppColors.Bg)
                 FieldCaption("Ghi chú")
                 TextField(
-                    value = note,
-                    onValueChange = { note = it },
+                    value = vm.note,
+                    onValueChange = { vm.note = it },
                     placeholder = { Text("Thêm ghi chú (không bắt buộc)") },
                     colors = plainTextFieldColors(),
                     modifier = Modifier.fillMaxWidth(),
@@ -192,9 +147,9 @@ fun TaskEditScreen(taskId: String?, onClose: () -> Unit) {
                 Category.entries.forEach { option ->
                     CategoryOption(
                         category = option,
-                        selected = category == option,
+                        selected = vm.category == option,
                         modifier = Modifier.weight(1f),
-                        onClick = { category = option },
+                        onClick = { vm.category = option },
                     )
                 }
             }
@@ -202,9 +157,9 @@ fun TaskEditScreen(taskId: String?, onClose: () -> Unit) {
             // Ngày, giờ, nhắc nhở
             Spacer(Modifier.height(14.dp))
             Column(Modifier.fillMaxWidth().card(16)) {
-                PickerRow(Icons.Outlined.CalendarMonth, "Ngày", value = dateLabel(date), onClick = { showDatePicker = true })
+                PickerRow(Icons.Outlined.CalendarMonth, "Ngày", value = dateLabel(vm.date), onClick = { showDatePicker = true })
                 HorizontalDivider(color = AppColors.Bg)
-                PickerRow(Icons.Outlined.Schedule, "Giờ", value = time, onClick = { showTimePicker = true })
+                PickerRow(Icons.Outlined.Schedule, "Giờ", value = vm.time, onClick = { showTimePicker = true })
                 HorizontalDivider(color = AppColors.Bg)
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Outlined.Notifications, contentDescription = null, tint = AppColors.Gray, modifier = Modifier.size(20.dp))
@@ -212,22 +167,22 @@ fun TaskEditScreen(taskId: String?, onClose: () -> Unit) {
                         Text("Nhắc tôi", fontSize = 16.sp)
                         Text("Trước 15 phút", fontSize = 12.sp, color = AppColors.Gray)
                     }
-                    Switch(checked = remind, onCheckedChange = { remind = it }, colors = greenSwitchColors())
+                    Switch(checked = vm.remind, onCheckedChange = { vm.remind = it }, colors = greenSwitchColors())
                 }
             }
 
             FormLabel("Mức ưu tiên")
-            PrioritySelector(selected = priority, onSelect = { priority = it })
+            PrioritySelector(selected = vm.priority, onSelect = { vm.priority = it })
         }
 
         Button(
-            onClick = ::save,
-            enabled = canSave,
+            onClick = { vm.save(context, taskId) { onClose() } },
+            enabled = vm.canSave,
             modifier = Modifier.fillMaxWidth().height(54.dp),
             shape = RoundedCornerShape(14.dp),
             colors = ButtonDefaults.buttonColors(containerColor = AppColors.Primary),
         ) {
-            if (isSaving) {
+            if (vm.isSaving) {
                 CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
             } else {
                 Text("Lưu công việc", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
@@ -235,17 +190,6 @@ fun TaskEditScreen(taskId: String?, onClose: () -> Unit) {
         }
     }
 }
-
-/** Các trường gửi lên khi sửa (PATCH chỉ cần những trường có trong form). */
-private fun Task.toChangeMap(): Map<String, Any> = mapOf(
-    "title" to title,
-    "note" to note,
-    "category" to category,
-    "date" to date,
-    "time" to time,
-    "priority" to priority,
-    "remind" to remind,
-)
 
 // ---------- Các phần nhỏ của form ----------
 
@@ -317,7 +261,7 @@ private fun PrioritySelector(selected: Priority, onSelect: (Priority) -> Unit) {
     }
 }
 
-/** Dòng "Ngày  [Thứ Tư, 21/10]": bấm để mở hộp chọn. */
+/** Dòng "Ngày [Thứ Tư, 21/10]": bấm để mở hộp chọn. */
 @Composable
 private fun PickerRow(icon: ImageVector, label: String, value: String, onClick: () -> Unit) {
     Row(
@@ -342,9 +286,9 @@ private fun PickerRow(icon: ImageVector, label: String, value: String, onClick: 
 @Composable
 private fun PickDateDialog(initialDate: String, onPicked: (String) -> Unit, onDismiss: () -> Unit) {
     val start = runCatching { LocalDate.parse(initialDate) }.getOrDefault(LocalDate.now())
-    // DatePicker làm việc với mili-giây theo giờ UTC
-    val state = rememberDatePickerState(initialSelectedDateMillis = start.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli())
-
+    val state = rememberDatePickerState(
+        initialSelectedDateMillis = start.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+    )
     DatePickerDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
@@ -372,7 +316,6 @@ private fun PickTimeDialog(initialTime: String, onPicked: (String) -> Unit, onDi
         initialMinute = hourAndMinute.getOrElse(1) { 0 },
         is24Hour = true,
     )
-
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {

@@ -40,15 +40,17 @@ import androidx.navigation.NavController
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
-// Trang chủ: lời chào, tiến độ hôm nay, thống kê theo nhóm, danh sách việc hôm nay.
+// Trang chu: loi chao, tien do hom nay, thong ke nhom, danh sach viec HOM NAY.
 
 @Composable
 fun HomeScreen(nav: NavController) = TabScaffold(nav, Routes.HOME) { padding ->
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val allTasks = TaskRepository.tasks
-    val todayTasks = allTasks.filter { it.isToday }
-    val todayDoneCount = todayTasks.count { it.done }
+    val scope   = rememberCoroutineScope()
+    val allTasks    = TaskRepository.tasks
+    val todayTasks  = allTasks.filter { it.isToday }
+    val todayDone   = todayTasks.count { it.done }
+    val todayTodo   = todayTasks.filter { !it.done }
+    val todayDoneList = todayTasks.filter { it.done }
 
     LazyColumn(
         Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
@@ -56,22 +58,40 @@ fun HomeScreen(nav: NavController) = TabScaffold(nav, Routes.HOME) { padding ->
         contentPadding = PaddingValues(vertical = 16.dp),
     ) {
         item { Greeting(nav) }
-        item { ProgressCard(done = todayDoneCount, total = todayTasks.size, message = RemoteConfigRepo.homeMessage.value) }
+
+        // Tien do hom nay: chi tinh task hom nay
+        item {
+            ProgressCard(
+                done    = todayDone,
+                total   = todayTasks.size,
+                message = RemoteConfigRepo.homeMessage.value,
+            )
+        }
+
+        // The nhom: dem theo toan bo allTasks (giong ListScreen)
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Category.entries.forEach { category ->
                     CategoryCard(
-                        category = category,
+                        category  = category,
                         remaining = allTasks.count { it.cat == category && !it.done },
-                        modifier = Modifier.weight(1f),
-                        onClick = { nav.openTab(Routes.LIST) },
+                        total     = allTasks.count { it.cat == category },
+                        modifier  = Modifier.weight(1f),
+                        onClick   = { nav.openTab(Routes.LIST) },
                     )
                 }
             }
         }
+
+        // Header danh sach hom nay
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Việc hôm nay", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(
+                    "Việc hôm nay",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
                 Text(
                     "Xem tất cả",
                     color = AppColors.Primary,
@@ -80,31 +100,47 @@ fun HomeScreen(nav: NavController) = TabScaffold(nav, Routes.HOME) { padding ->
                 )
             }
         }
+
         item { LoadState() }
+
         if (todayTasks.isEmpty() && !TaskRepository.loading.value) {
-            item { Text("Hôm nay chưa có việc nào 🎉", color = AppColors.Gray) }
+            item { Text("Hôm nay chưa có việc nào \uD83C\uDF89", color = AppColors.Gray) }
         }
-        items(todayTasks, key = { it.id }) { task ->
+
+        // Can lam hom nay
+        items(todayTodo, key = { it.id }) { task ->
             TaskRow(
-                task = task,
-                timeLabel = task.time,
-                onOpen = { nav.navigate(Routes.detail(task.id)) },
+                task         = task,
+                timeLabel    = task.time,
+                onOpen       = { nav.navigate(Routes.detail(task.id)) },
                 onToggleDone = { scope.call(context) { TaskRepository.toggleDone(task) } },
             )
+        }
+
+        // Da xong hom nay (compact, o cuoi)
+        if (todayDoneList.isNotEmpty()) {
+            item { SectionLabel("ĐÃ XONG HÔM NAY") }
+            items(todayDoneList, key = { "done_${it.id}" }) { task ->
+                TaskRow(
+                    task         = task,
+                    timeLabel    = task.time,
+                    compact      = true,
+                    onOpen       = { nav.navigate(Routes.detail(task.id)) },
+                    onToggleDone = { scope.call(context) { TaskRepository.toggleDone(task) } },
+                )
+            }
         }
     }
 }
 
-/** Avatar + ngày + "Chào <tên>!" bên trái, nút chuông Thông báo bên phải. */
 @Composable
 private fun Greeting(nav: NavController) {
-    val userName = AuthRepository.user.displayName()
+    val userName  = AuthRepository.user.displayName()
     val todayText = LocalDate.now()
         .format(DateTimeFormatter.ofPattern("EEEE, d 'tháng' M", Vietnamese))
         .replaceFirstChar { it.uppercase() }
 
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        // Nhấn vào avatar hoặc tên để mở Hồ sơ
         Row(
             Modifier.weight(1f).clickable { nav.navigate(Routes.PROFILE) },
             verticalAlignment = Alignment.CenterVertically,
@@ -117,10 +153,9 @@ private fun Greeting(nav: NavController) {
             }
         }
         IconButton(
-            onClick = { nav.openTab(Routes.NOTIFICATIONS) },
+            onClick  = { nav.openTab(Routes.NOTIFICATIONS) },
             modifier = Modifier.clip(CircleShape).background(AppColors.Card),
         ) {
-            // Chấm đỏ khi có thông báo mới (FCM)
             BadgedBox(badge = { if (Inbox.messages.isNotEmpty()) Badge() }) {
                 Icon(Icons.Outlined.Notifications, contentDescription = "Thông báo")
             }
@@ -128,11 +163,10 @@ private fun Greeting(nav: NavController) {
     }
 }
 
-/** Thẻ màu chủ đạo: "3/7 việc" và vòng tròn phần trăm. */
 @Composable
 private fun ProgressCard(done: Int, total: Int, message: String) {
     val progress = if (total == 0) 0f else done.toFloat() / total
-    val percent = (progress * 100).toInt()
+    val percent  = (progress * 100).toInt()
 
     Row(
         Modifier
@@ -145,14 +179,14 @@ private fun ProgressCard(done: Int, total: Int, message: String) {
         Column(Modifier.weight(1f)) {
             Text("Tiến độ hôm nay", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
             Text("$done/$total việc", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Text(message, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp) // câu này lấy từ Remote Config
+            Text(message, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
         }
         Box(contentAlignment = Alignment.Center) {
             CircularProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.size(60.dp),
-                color = Color.White,
-                trackColor = Color.White.copy(alpha = 0.3f),
+                progress    = { progress },
+                modifier    = Modifier.size(60.dp),
+                color       = Color.White,
+                trackColor  = Color.White.copy(alpha = 0.3f),
                 strokeWidth = 5.dp,
             )
             Text("$percent%", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
@@ -160,9 +194,14 @@ private fun ProgressCard(done: Int, total: Int, message: String) {
     }
 }
 
-/** Thẻ "Học tập / Cuộc sống — N việc còn lại". */
 @Composable
-private fun CategoryCard(category: Category, remaining: Int, modifier: Modifier, onClick: () -> Unit) {
+private fun CategoryCard(
+    category  : Category,
+    remaining : Int,
+    total     : Int,
+    modifier  : Modifier,
+    onClick   : () -> Unit,
+) {
     Column(modifier.card(14).clickable(onClick = onClick).padding(14.dp)) {
         Box(
             Modifier
@@ -175,6 +214,6 @@ private fun CategoryCard(category: Category, remaining: Int, modifier: Modifier,
         }
         Spacer(Modifier.height(10.dp))
         Text(category.label, fontWeight = FontWeight.SemiBold)
-        Text("$remaining việc còn lại", fontSize = 12.sp, color = AppColors.Gray)
+        Text("$remaining/$total việc còn lại", fontSize = 12.sp, color = AppColors.Gray)
     }
 }
